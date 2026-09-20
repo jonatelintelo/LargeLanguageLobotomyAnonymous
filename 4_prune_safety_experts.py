@@ -51,13 +51,23 @@ def register_pruning_hooks_candidates(model_name, model, candidates):
     """Registers pruning hooks on the given model layers."""
     hook_handles = []
 
+    if not candidates:
+        return hook_handles
+
+    # The layer index in a candidate is the index along the trace layer axis built by script 1, which lists the
+    # gate modules in model.named_modules() order. That is not the decoder layer index whenever the first layers
+    # are dense: deepseek-moe-16b-chat has 27 MoE layers inside a 28-layer stack, so trace layer l sits on
+    # decoder layer l+1. Resolving the candidate against the same ordered gate list keeps the two in step, and
+    # also avoids the suffix match "1.mlp.gate" hitting "model.layers.11.mlp.gate".
+    gate_name = candidates[0][0].split(".", 1)[1]
+    gate_modules = [(name, module) for name, module in model.named_modules() if name.lower().endswith(gate_name.lower())]
+
     for candidate in candidates:  # Start pruning every candidate
-        for layer_name, module in model.named_modules():  # Loop over all layers
-            if layer_name.lower().endswith(candidate[0]):  # Find the layer in the model which matches with current candidate
-                hook_fn = get_pruning_hook_candidates(model_name, layer_name, candidate[1])
-                handle = module.register_forward_hook(hook_fn)
-                hook_handles.append(handle)
-                break  # break because we only need to register on this layer once
+        trace_layer = int(candidate[0].split(".", 1)[0])
+        layer_name, module = gate_modules[trace_layer]
+        hook_fn = get_pruning_hook_candidates(model_name, layer_name, candidate[1])
+        handle = module.register_forward_hook(hook_fn)
+        hook_handles.append(handle)
 
     return hook_handles
 
